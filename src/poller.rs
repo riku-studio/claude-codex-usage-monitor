@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 use std::os::windows::process::CommandExt;
 
+use crate::codex_usage::{codex_usage_from_response, CodexUsageResponse};
 use crate::diagnose;
 use crate::localization::Strings;
 use crate::models::{AppUsageData, UsageData, UsageSection};
@@ -53,23 +54,6 @@ struct CodexAuthFile {
 struct CodexTokenData {
     access_token: String,
     account_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct CodexUsageResponse {
-    rate_limit: Option<Option<Box<CodexRateLimitDetails>>>,
-}
-
-#[derive(Deserialize)]
-struct CodexRateLimitDetails {
-    primary_window: Option<Option<Box<CodexRateLimitWindow>>>,
-    secondary_window: Option<Option<Box<CodexRateLimitWindow>>>,
-}
-
-#[derive(Deserialize)]
-struct CodexRateLimitWindow {
-    used_percent: f64,
-    reset_at: i64,
 }
 
 pub fn poll(show_claude_code: bool, show_codex: bool) -> Result<AppUsageData, PollError> {
@@ -672,28 +656,6 @@ fn fetch_codex_usage(token: &str, account_id: Option<&str>) -> Result<UsageData,
     codex_usage_from_response(response).ok_or(PollError::RequestFailed)
 }
 
-fn codex_usage_from_response(response: CodexUsageResponse) -> Option<UsageData> {
-    let details = *response.rate_limit.flatten()?;
-    let mut data = UsageData::default();
-
-    if let Some(window) = details.primary_window.flatten() {
-        data.session = codex_section_from_window(&window);
-    }
-
-    if let Some(window) = details.secondary_window.flatten() {
-        data.weekly = codex_section_from_window(&window);
-    }
-
-    Some(data)
-}
-
-fn codex_section_from_window(window: &CodexRateLimitWindow) -> UsageSection {
-    UsageSection {
-        percentage: window.used_percent,
-        resets_at: unix_to_system_time(Some(window.reset_at)),
-    }
-}
-
 fn get_header_f64(response: &ureq::Response, name: &str) -> f64 {
     response
         .header(name)
@@ -1113,10 +1075,16 @@ fn format_countdown(resets_at: Option<SystemTime>, strings: Strings, detailed: b
 /// Calculate how long until the display text would change. When `detailed` is
 /// on, the value changes on the finer sub-unit boundary (minute for `Xh Ym`,
 /// hour for `Xd Yh`).
-pub fn time_until_display_change(resets_at: Option<SystemTime>, detailed: bool) -> Option<Duration> {
+pub fn time_until_display_change(
+    resets_at: Option<SystemTime>,
+    detailed: bool,
+) -> Option<Duration> {
     let reset = resets_at?;
     let remaining = reset.duration_since(SystemTime::now()).ok()?;
-    Some(time_until_display_change_from_secs(remaining.as_secs(), detailed))
+    Some(time_until_display_change_from_secs(
+        remaining.as_secs(),
+        detailed,
+    ))
 }
 
 fn format_countdown_from_secs(total_secs: u64, strings: Strings, detailed: bool) -> String {

@@ -10,6 +10,8 @@ pub struct UsageSection {
 pub struct UsageData {
     pub session: UsageSection,
     pub weekly: UsageSection,
+    /// Known (5h, 7d) window availability; None for sources without this metadata.
+    pub available_windows: Option<(bool, bool)>,
 }
 
 #[derive(Clone, Debug, Default)]

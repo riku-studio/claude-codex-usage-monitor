@@ -79,23 +79,28 @@ pub fn get_window_rect_safe(hwnd: HWND) -> Option<RECT> {
     }
 }
 
-/// Embed our window as a child of the taskbar
-pub fn embed_in_taskbar(hwnd: HWND, taskbar_hwnd: HWND) {
+/// Keep the widget independent of Explorer's child-window clipping/lifetime.
+pub fn prepare_taskbar_overlay(hwnd: HWND) -> bool {
     unsafe {
-        // Preserve existing extended style, add tool window + no activate
+        if GetParent(hwnd).is_ok() {
+            let _ = SetParent(hwnd, HWND::default());
+        }
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         let _ = SetWindowLongW(
             hwnd,
             GWL_EXSTYLE,
-            ex_style | WS_EX_TOOLWINDOW.0 as i32 | WS_EX_NOACTIVATE.0 as i32,
+            ex_style
+                | WS_EX_TOOLWINDOW.0 as i32
+                | WS_EX_NOACTIVATE.0 as i32
+                | WS_EX_LAYERED.0 as i32,
         );
-
-        // Change from popup to child
         let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-        let new_style = (style & !WS_POPUP_STYLE) | WS_CHILD_STYLE | WS_CLIPSIBLINGS_STYLE;
-        let _ = SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
-
-        let _ = SetParent(hwnd, taskbar_hwnd);
+        let _ = SetWindowLongW(
+            hwnd,
+            GWL_STYLE,
+            ((style & !(WS_CHILD_STYLE | WS_CLIPSIBLINGS_STYLE)) | WS_POPUP_STYLE) as i32,
+        );
+        IsWindow(hwnd).as_bool() && GetParent(hwnd).is_err()
     }
 }
 

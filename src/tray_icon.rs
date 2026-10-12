@@ -23,17 +23,7 @@ pub enum TrayAction {
     ShowContextMenu,
 }
 
-#[derive(Clone, Copy)]
-pub enum TrayIconKind {
-    Claude,
-    Codex,
-}
-
-pub struct TrayIconData {
-    pub kind: TrayIconKind,
-    pub percent: Option<f64>,
-    pub tooltip: String,
-}
+pub use crate::tray_status::{TrayIconData, TrayIconKind};
 
 impl TrayIconKind {
     fn id(self) -> u32 {
@@ -306,6 +296,9 @@ fn load_embedded_app_icon() -> HICON {
         if extracted == 0 {
             HICON::default()
         } else if !small_icon.is_invalid() {
+            if !large_icon.is_invalid() {
+                let _ = DestroyIcon(large_icon);
+            }
             small_icon
         } else {
             large_icon
@@ -315,12 +308,12 @@ fn load_embedded_app_icon() -> HICON {
 
 /// Show a Windows balloon notification from the tray icon.
 /// Used to alert the user when re-authentication is required.
-pub fn notify_balloon(hwnd: HWND, kind: TrayIconKind, title: &str, message: &str) {
+pub fn notify_balloon(hwnd: HWND, _kind: TrayIconKind, title: &str, message: &str) {
     unsafe {
         let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = hwnd;
-        nid.uID = kind.id();
+        nid.uID = CLAUDE_TRAY_ICON_ID;
         nid.uFlags = NIF_INFO;
         nid.dwInfoFlags = NIIF_WARNING;
         copy_wide(title, &mut nid.szInfoTitle);
@@ -391,25 +384,13 @@ pub fn remove(hwnd: HWND, kind: TrayIconKind) {
 }
 
 pub fn sync(hwnd: HWND, icons: &[TrayIconData]) {
-    let show_claude = icons
-        .iter()
-        .find(|icon| matches!(icon.kind, TrayIconKind::Claude));
-    let show_codex = icons
-        .iter()
-        .find(|icon| matches!(icon.kind, TrayIconKind::Codex));
-
-    if let Some(icon) = show_claude {
+    // Delete the previous per-Codex icon when migrating from older builds.
+    remove(hwnd, TrayIconKind::Codex);
+    if let Some(icon) = crate::tray_status::combined_icon(icons) {
         add(hwnd, icon.kind, icon.percent, &icon.tooltip);
         update(hwnd, icon.kind, icon.percent, &icon.tooltip);
     } else {
         remove(hwnd, TrayIconKind::Claude);
-    }
-
-    if let Some(icon) = show_codex {
-        add(hwnd, icon.kind, icon.percent, &icon.tooltip);
-        update(hwnd, icon.kind, icon.percent, &icon.tooltip);
-    } else {
-        remove(hwnd, TrayIconKind::Codex);
     }
 }
 

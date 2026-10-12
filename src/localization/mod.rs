@@ -129,6 +129,7 @@ pub struct Strings {
     pub fifteen_minutes: &'static str,
     pub one_hour: &'static str,
     pub models: &'static str,
+    pub displayed_limits: &'static str,
     pub claude_code_model: &'static str,
     pub codex_model: &'static str,
     pub settings: &'static str,

@@ -20,7 +20,7 @@ It sits in your taskbar and shows how much of your Claude and Codex usage window
 - A small native widget that lives directly in the Windows taskbar
 - **Switchable bar styles**: Segmented blocks, Minimal flat, Gradient glow, Retro pixel
 - **Pixel companion characters** (cat and/or dog) that roam above the widget and react to your usage
-- System tray icon badges showing your enabled model usage percentage
+- One application tray icon with Claude and Codex usage in its tooltip
 - Left-click the tray icon to toggle the taskbar widget on or off
 - Right-click options for displayed models, bar style, characters, refresh, update frequency, language, startup, and updates
 
@@ -71,7 +71,7 @@ To uninstall, use **Settings → Apps → Installed apps → Claude & Codex Usag
 
 Launch **Claude & Codex Usage Monitor** from the Start Menu (or tick "Launch" at the end of setup).
 
-Once running, it appears in your taskbar and as one or more tray icons in the notification area.
+Once running, it appears in your taskbar and as one application tray icon in the notification area.
 
 - Drag the left divider to move the taskbar widget
 - Right-click the taskbar widget or tray icon for displayed models, bar style, characters, refresh, update frequency, Start with Windows, reset position, language, updates, and exit
@@ -86,6 +86,31 @@ Use the right-click **Models** menu to choose what the widget displays:
 - **Codex** can be enabled alongside Claude Code or shown by itself
 
 When both models are shown, each model has its own usage bar and matching usage text color.
+
+### Displayed limits
+
+Right-click the widget or a tray icon, then open **Displayed limits → Claude Code / Codex**
+to select **5h** and **7d** independently for each model. Keep at least one limit
+selected per model; use **Models** to hide a model entirely. Preferences are saved
+and apply immediately. Existing settings keep both limits visible by default.
+
+When both models are enabled and each has only one selected limit, the widget
+uses one column with **Claude above Codex**, including the model and period labels.
+For example, deselect **5h** for both models to show:
+
+```text
+Claude 7d  [usage bar]  percentage · reset time
+Codex  7d  [usage bar]  percentage · reset time
+```
+
+Codex periods are identified by the API window duration, not primary/secondary
+position. If Codex reports only one supported window, only that real window is
+displayed, even if an older preference selected the missing period. Saved
+preferences are retained for accounts that later report both windows.
+
+This also works if the models select different periods. If either model shows
+both limits, the widget keeps separate model columns with 5h above 7d. A single
+enabled model with one selected limit shows a vertically centered row. The shared tray tooltip lists only the selected limits for each enabled model.
 
 ### Bar Style
 
@@ -110,17 +135,36 @@ The characters idle, walk, and blink, and react to your usage: they show an enco
 
 ### System Tray Icon
 
-The tray icon shows your current 5-hour usage as a percentage badge.
+The monitor uses one application icon regardless of which models are enabled.
+Hover over it to see the selected Claude and Codex usage values. Left-click to
+toggle the widget; right-click to open the existing settings menu. Authentication
+notifications also use this shared icon.
 
-If both Claude Code and Codex are enabled, the app shows two tray icons: one for Claude Code and one for Codex. If only one model is enabled, it shows one tray icon.
+The tray entry belongs to an independent controller window so it survives widget
+recreation. After sleep/hibernation, session unlock or Explorer taskbar recreation,
+the controller restores a standalone transparent overlay at the taskbar position
+and keeps the saved visibility, position and limit preferences. It also checks
+its position and visibility periodically. The widget is independent of Explorer's
+child windows. It follows the taskbar's actual visibility and auto-hide state, then returns without
+changing the saved visibility preference. Foreground changes and taskbar clicks
+do not hide the widget based on window geometry. All labels and values remain pure black with no
+shadows or outlines.
 
-The Claude tray icon uses the same warm usage colors as the Claude bar. The Codex tray icon uses a black and white badge style.
+## Development checks
 
-Hovering over a tray icon shows the usage values for that model.
+On Windows, run `cargo test --locked` and `cargo build --locked --release`.
+Pull requests run these checks on a Windows runner and package an installer;
+the **Windows development build** artifact contains the executable and installer.
+The same workflow can be run manually. These checks cover parsing, preferences,
+and visibility policy; desktop interaction, sleep/resume, and Explorer recovery
+still require an interactive Windows desktop.
 
 ## Diagnostics
 
-If you need to troubleshoot startup or visibility issues, run:
+Local builds enable bounded diagnostic logging automatically, including visibility
+changes, monitor/taskbar geometry and rendering failures. Logs append across
+restarts, rotating the previous ~4 MiB to `.previous.log`. Credentials are not logged.
+For other builds, enable logging with:
 
 ```powershell
 claude-codex-usage-monitor --diagnose

@@ -439,6 +439,26 @@ pub fn set_enabled(enabled: bool) {
     }
 }
 
+/// Temporary taskbar suppression does not alter the saved character preference.
+pub fn set_widget_visible(visible: bool) {
+    let target = {
+        let guard = STATE.lock().unwrap();
+        guard.as_ref().map(|s| (HWND(s.hwnd as *mut _), s.enabled))
+    };
+    if let Some((hwnd, enabled)) = target {
+        unsafe {
+            let _ = ShowWindow(
+                hwnd,
+                if visible && enabled {
+                    SW_SHOWNOACTIVATE
+                } else {
+                    SW_HIDE
+                },
+            );
+        }
+    }
+}
+
 pub fn set_kind(kind: CharacterKind) {
     {
         let mut guard = STATE.lock().unwrap();
