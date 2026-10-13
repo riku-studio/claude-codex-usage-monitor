@@ -15,6 +15,7 @@ Unicode true
 !define APP_ID "ClaudeCodexUsageMonitor"
 !define PUBLISHER "Chinzoe"
 !define VERSION "1.3.1"
+!define DISPLAY_VERSION "1.3.1-local.9"
 !define EXE_NAME "claude-codex-usage-monitor.exe"
 ; EXE_SOURCE can be overridden on the command line, e.g. in CI which uses the
 ; MSVC target dir:  makensis /DEXE_SOURCE=..\target\release\<exe> script.nsi
@@ -36,8 +37,8 @@ VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "${APP_NAME}"
 VIAddVersionKey "CompanyName" "${PUBLISHER}"
 VIAddVersionKey "FileDescription" "${APP_NAME} Installer"
-VIAddVersionKey "FileVersion" "${VERSION}"
-VIAddVersionKey "ProductVersion" "${VERSION}"
+VIAddVersionKey "FileVersion" "${DISPLAY_VERSION}"
+VIAddVersionKey "ProductVersion" "${DISPLAY_VERSION}"
 VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}"
 
 !define MUI_ICON "..\src\icons\icon.ico"
@@ -45,6 +46,7 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}"
 
 ; Finish page: offer to launch the app
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE_NAME}"
+!define MUI_FINISHPAGE_RUN_PARAMETERS "--show-widget"
 !define MUI_FINISHPAGE_RUN_TEXT "Launch ${APP_NAME}"
 
 !insertmacro MUI_PAGE_WELCOME
@@ -62,6 +64,11 @@ Section "Install"
   ; Stop a running instance so the executable is not locked.
   nsExec::ExecToLog 'taskkill /F /IM "${EXE_NAME}"'
   Pop $0
+  ; Portable builds also share the app mutex: stop their old processes too.
+  nsExec::ExecToLog 'taskkill /F /IM "claude-codex-usage-monitor-1.3.1-local.4.exe"'
+  Pop $0
+  nsExec::ExecToLog 'taskkill /F /IM "claude-codex-usage-monitor-1.3.1-local.5.exe"'
+  Pop $0
 
   SetOutPath "$INSTDIR"
   File "${EXE_SOURCE}"
@@ -73,7 +80,7 @@ Section "Install"
   WriteRegStr HKCU "Software\${APP_ID}" "InstallDir" "$INSTDIR"
 
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP_NAME}"
-  WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${DISPLAY_VERSION}"
   WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${PUBLISHER}"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${EXE_NAME}"
   WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"

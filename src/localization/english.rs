@@ -11,6 +11,7 @@ pub(super) const STRINGS: Strings = Strings {
     fifteen_minutes: "15 Minutes",
     one_hour: "1 Hour",
     models: "Models",
+    displayed_limits: "Displayed limits",
     claude_code_model: "Claude Code",
     codex_model: "Codex",
     settings: "Settings",

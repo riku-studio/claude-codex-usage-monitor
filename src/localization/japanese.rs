@@ -11,6 +11,7 @@ pub(super) const STRINGS: Strings = Strings {
     fifteen_minutes: "15分",
     one_hour: "1時間",
     models: "モデル",
+    displayed_limits: "表示する使用枠",
     claude_code_model: "Claude Code",
     codex_model: "Codex",
     settings: "設定",

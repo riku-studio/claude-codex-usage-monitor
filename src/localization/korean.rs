@@ -11,6 +11,7 @@ pub(super) const STRINGS: Strings = Strings {
     fifteen_minutes: "15분",
     one_hour: "1시간",
     models: "모델",
+    displayed_limits: "표시할 사용 한도",
     claude_code_model: "Claude Code",
     codex_model: "Codex",
     settings: "설정",

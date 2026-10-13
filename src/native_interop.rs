@@ -12,6 +12,12 @@ pub const WS_CLIPSIBLINGS_STYLE: u32 = 0x04000000;
 // Win event constants
 pub const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800B;
 pub const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
+pub const WINEVENT_SKIPOWNPROCESS: u32 = 0x0002;
+pub const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
+pub const EVENT_OBJECT_SHOW: u32 = 0x8002;
+pub const EVENT_OBJECT_HIDE: u32 = 0x8003;
+pub const EVENT_OBJECT_REORDER: u32 = 0x8004;
+pub const EVENT_OBJECT_FOCUS: u32 = 0x8005;
 
 // Timer IDs
 pub const TIMER_POLL: usize = 1;
@@ -79,23 +85,28 @@ pub fn get_window_rect_safe(hwnd: HWND) -> Option<RECT> {
     }
 }
 
-/// Embed our window as a child of the taskbar
-pub fn embed_in_taskbar(hwnd: HWND, taskbar_hwnd: HWND) {
+/// Keep the widget independent of Explorer's child-window clipping/lifetime.
+pub fn prepare_taskbar_overlay(hwnd: HWND) -> bool {
     unsafe {
-        // Preserve existing extended style, add tool window + no activate
+        if GetParent(hwnd).is_ok() {
+            let _ = SetParent(hwnd, HWND::default());
+        }
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         let _ = SetWindowLongW(
             hwnd,
             GWL_EXSTYLE,
-            ex_style | WS_EX_TOOLWINDOW.0 as i32 | WS_EX_NOACTIVATE.0 as i32,
+            ex_style
+                | WS_EX_TOOLWINDOW.0 as i32
+                | WS_EX_NOACTIVATE.0 as i32
+                | WS_EX_LAYERED.0 as i32,
         );
-
-        // Change from popup to child
         let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-        let new_style = (style & !WS_POPUP_STYLE) | WS_CHILD_STYLE | WS_CLIPSIBLINGS_STYLE;
-        let _ = SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
-
-        let _ = SetParent(hwnd, taskbar_hwnd);
+        let _ = SetWindowLongW(
+            hwnd,
+            GWL_STYLE,
+            ((style & !(WS_CHILD_STYLE | WS_CLIPSIBLINGS_STYLE)) | WS_POPUP_STYLE) as i32,
+        );
+        IsWindow(hwnd).as_bool() && GetParent(hwnd).is_err()
     }
 }
 
@@ -127,6 +138,34 @@ pub fn set_tray_event_hook(
             Some(hook)
         }
     }
+}
+
+/// Foreground changes and shell z-order/geometry events arrive on the installing
+/// thread. Ignore our own window events to avoid a SetWindowPos feedback loop.
+pub fn set_overlay_event_hooks(
+    callback: unsafe extern "system" fn(HWINEVENTHOOK, u32, HWND, i32, i32, u32, u32),
+) -> Vec<HWINEVENTHOOK> {
+    let mut hooks = Vec::new();
+    for (start, end) in [
+        (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+        (EVENT_OBJECT_SHOW, EVENT_OBJECT_LOCATIONCHANGE),
+    ] {
+        let hook = unsafe {
+            SetWinEventHook(
+                start,
+                end,
+                None,
+                Some(callback),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            )
+        };
+        if !hook.is_invalid() {
+            hooks.push(hook);
+        }
+    }
+    hooks
 }
 
 /// Get the thread ID that owns a window

@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// Preserve temporary suppression across init, reposition and preference changes.
+static WIDGET_VISIBLE: AtomicBool = AtomicBool::new(true);
+
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -388,7 +391,7 @@ pub fn init(
     reposition(anchor);
     if enabled {
         unsafe {
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let _ = ShowWindow(hwnd, if WIDGET_VISIBLE.load(Ordering::Relaxed) { SW_SHOWNOACTIVATE } else { SW_HIDE });
             SetTimer(hwnd, TIMER_ANIM, ANIM_INTERVAL_MS, None);
         }
         render();
@@ -427,7 +430,7 @@ pub fn set_enabled(enabled: bool) {
     };
     unsafe {
         if enabled {
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let _ = ShowWindow(hwnd, if WIDGET_VISIBLE.load(Ordering::Relaxed) { SW_SHOWNOACTIVATE } else { SW_HIDE });
             SetTimer(hwnd, TIMER_ANIM, ANIM_INTERVAL_MS, None);
         } else {
             KillTimer(hwnd, TIMER_ANIM).ok();
@@ -436,6 +439,27 @@ pub fn set_enabled(enabled: bool) {
     }
     if enabled {
         render();
+    }
+}
+
+/// Temporary taskbar suppression does not alter the saved character preference.
+pub fn set_widget_visible(visible: bool) {
+    WIDGET_VISIBLE.store(visible, Ordering::Relaxed);
+    let target = {
+        let guard = STATE.lock().unwrap();
+        guard.as_ref().map(|s| (HWND(s.hwnd as *mut _), s.enabled))
+    };
+    if let Some((hwnd, enabled)) = target {
+        unsafe {
+            let _ = ShowWindow(
+                hwnd,
+                if visible && enabled {
+                    SW_SHOWNOACTIVATE
+                } else {
+                    SW_HIDE
+                },
+            );
+        }
     }
 }
 
@@ -529,7 +553,7 @@ pub fn reposition(anchor: RECT) {
     let x = anchor.left;
     let y = anchor.top - win_h;
     unsafe {
-        let flags = SWP_NOACTIVATE | if enabled { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW };
+        let flags = SWP_NOACTIVATE | if enabled && WIDGET_VISIBLE.load(Ordering::Relaxed) { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW };
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, win_w, win_h, flags);
     }
 }

@@ -1,0 +1,41 @@
+name: Windows development build
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test quota parsing and display policies
+        run: cargo test --locked
+
+      - name: Build application
+        run: cargo build --locked --release
+
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\NSIS\makensis.exe" `
+            /DEXE_SOURCE=..\target\release\claude-codex-usage-monitor.exe `
+            installer\claude-codex-usage-monitor.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows application and installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            target/release/claude-codex-usage-monitor.exe
+            installer/claude-codex-usage-monitor-setup.exe

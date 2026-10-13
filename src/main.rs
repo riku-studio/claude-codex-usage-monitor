@@ -1,23 +1,31 @@
 #![windows_subsystem = "windows"]
 
 mod character;
+mod codex_usage;
 mod diagnose;
 mod localization;
 mod models;
 mod native_interop;
+mod overlay_visibility;
 mod poller;
+mod quota_layout;
 mod theme;
 mod tray_icon;
+mod tray_status;
 mod updater;
+mod widget_pixels;
 mod window;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let diagnose_enabled = args.iter().any(|arg| arg == "--diagnose");
+    let diagnose_enabled =
+        args.iter().any(|arg| arg == "--diagnose") || env!("CARGO_PKG_VERSION").contains("-local.");
     if diagnose_enabled {
         match diagnose::init() {
             Ok(path) => diagnose::log(format!(
-                "startup args={args:?} log_path={}",
+                "startup version={} pid={} log_path={}",
+                env!("CARGO_PKG_VERSION"),
+                std::process::id(),
                 path.display()
             )),
             Err(error) => {
