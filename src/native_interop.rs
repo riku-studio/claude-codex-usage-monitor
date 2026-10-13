@@ -12,6 +12,12 @@ pub const WS_CLIPSIBLINGS_STYLE: u32 = 0x04000000;
 // Win event constants
 pub const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800B;
 pub const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
+pub const WINEVENT_SKIPOWNPROCESS: u32 = 0x0002;
+pub const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
+pub const EVENT_OBJECT_SHOW: u32 = 0x8002;
+pub const EVENT_OBJECT_HIDE: u32 = 0x8003;
+pub const EVENT_OBJECT_REORDER: u32 = 0x8004;
+pub const EVENT_OBJECT_FOCUS: u32 = 0x8005;
 
 // Timer IDs
 pub const TIMER_POLL: usize = 1;
@@ -132,6 +138,34 @@ pub fn set_tray_event_hook(
             Some(hook)
         }
     }
+}
+
+/// Foreground changes and shell z-order/geometry events arrive on the installing
+/// thread. Ignore our own window events to avoid a SetWindowPos feedback loop.
+pub fn set_overlay_event_hooks(
+    callback: unsafe extern "system" fn(HWINEVENTHOOK, u32, HWND, i32, i32, u32, u32),
+) -> Vec<HWINEVENTHOOK> {
+    let mut hooks = Vec::new();
+    for (start, end) in [
+        (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+        (EVENT_OBJECT_SHOW, EVENT_OBJECT_LOCATIONCHANGE),
+    ] {
+        let hook = unsafe {
+            SetWinEventHook(
+                start,
+                end,
+                None,
+                Some(callback),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            )
+        };
+        if !hook.is_invalid() {
+            hooks.push(hook);
+        }
+    }
+    hooks
 }
 
 /// Get the thread ID that owns a window

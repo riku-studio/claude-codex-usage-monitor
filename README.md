@@ -145,10 +145,14 @@ recreation. After sleep/hibernation, session unlock or Explorer taskbar recreati
 the controller restores a standalone transparent overlay at the taskbar position
 and keeps the saved visibility, position and limit preferences. It also checks
 its position and visibility periodically. The widget is independent of Explorer's
-child windows. It follows the taskbar's actual visibility and auto-hide state, then returns without
-changing the saved visibility preference. Foreground changes and taskbar clicks
-do not hide the widget based on window geometry. All labels and values remain pure black with no
-shadows or outlines.
+child windows. It follows the taskbar's actual visibility and auto-hide state.
+Foreground, taskbar focus, geometry and z-order events refresh its position
+immediately, with one follow-up after 100 ms to let Explorer finish its transition.
+Fullscreen applications on the taskbar's monitor hide both the widget and the
+character; leaving fullscreen restores them without changing saved preferences.
+Fullscreen detection uses the application's client area and excludes desktop,
+taskbar and shell windows, so maximized windows and taskbar clicks do not count.
+All labels and values remain pure black with no shadows or outlines.
 
 ## Development checks
 

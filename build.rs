@@ -18,7 +18,8 @@ fn main() {
     // (e.g. x86_64-w64-mingw32-windres) instead of the bare `windres`/`ar`.
     let target = std::env::var("TARGET").unwrap_or_default();
     let host = std::env::var("HOST").unwrap_or_default();
-    let cross_gnu = target.ends_with("windows-gnu") && !host.contains("windows");
+    let gnu = target.ends_with("windows-gnu");
+    let cross_gnu = gnu && !host.contains("windows");
     if cross_gnu {
         let arch = target.split('-').next().unwrap_or("x86_64");
         let prefix = format!("{arch}-w64-mingw32");
@@ -31,7 +32,7 @@ fn main() {
             // winres hands the gnu linker the resource as a static lib, which
             // gets GC'd because no Rust symbol references it. Link the object
             // directly so the icon/version actually end up in the binary.
-            if cross_gnu {
+            if gnu {
                 let out_dir = std::env::var("OUT_DIR").unwrap_or_default();
                 println!("cargo:rustc-link-arg={out_dir}/resource.o");
             }

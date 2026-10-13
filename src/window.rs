@@ -54,6 +54,7 @@ struct AppState {
     taskbar_hwnd: Option<HWND>,
     tray_notify_hwnd: Option<HWND>,
     win_event_hook: Option<HWINEVENTHOOK>,
+    overlay_event_hooks: Vec<HWINEVENTHOOK>,
     is_dark: bool,
     language_override: Option<LanguageId>,
     language: LanguageId,
@@ -158,6 +159,9 @@ const IDM_TOGGLE_DETAILED: u16 = 97;
 const IDM_PACE_TOGGLE: u16 = 98;
 
 const TIMER_RECOVERY: usize = 5;
+const TIMER_OVERLAY_SETTLE: usize = 6;
+const WM_APP_OVERLAY_REFRESH: u32 = WM_APP + 4;
+static OVERLAY_REFRESH_PENDING: AtomicBool = AtomicBool::new(false);
 static RECOVERY_WINDOW: AtomicIsize = AtomicIsize::new(0);
 static RECREATE_WIDGET: AtomicBool = AtomicBool::new(false);
 static TASKBAR_CREATED_MSG: AtomicU32 = AtomicU32::new(0);
@@ -1402,6 +1406,7 @@ pub fn run() {
                 taskbar_hwnd: None,
                 tray_notify_hwnd: None,
                 win_event_hook: None,
+                overlay_event_hooks: Vec::new(),
                 is_dark,
                 language_override,
                 language,
@@ -1534,6 +1539,14 @@ pub fn run() {
             // Tray callbacks must survive destruction/replacement of the widget.
             tray_icon::remove_all(hwnd);
             RECOVERY_WINDOW.store(controller.0 as isize, Ordering::Relaxed);
+            let hooks = native_interop::set_overlay_event_hooks(on_overlay_event);
+            diagnose::log(format!(
+                "overlay event hooks installed count={}",
+                hooks.len()
+            ));
+            if let Some(s) = lock_state().as_mut() {
+                s.overlay_event_hooks = hooks;
+            }
             sync_tray_icons(hwnd);
         } else {
             diagnose::log("unable to create taskbar recovery controller");
@@ -1605,6 +1618,19 @@ unsafe extern "system" fn recovery_wnd_proc(
         return LRESULT(0);
     }
     match msg {
+        WM_APP_OVERLAY_REFRESH => {
+            OVERLAY_REFRESH_PENDING.store(false, Ordering::Relaxed);
+            position_at_taskbar();
+            // Explorer can finish raising the taskbar after its foreground event.
+            // Repeat once after that transition, without waiting for the watchdog.
+            SetTimer(hwnd, TIMER_OVERLAY_SETTLE, 100, None);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_OVERLAY_SETTLE => {
+            let _ = KillTimer(hwnd, TIMER_OVERLAY_SETTLE);
+            position_at_taskbar();
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == TIMER_RECOVERY => {
             recover_taskbar(false);
             // A valid HWND does not prove that DWM retained the layered surface
@@ -1641,6 +1667,14 @@ unsafe extern "system" fn recovery_wnd_proc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            RECOVERY_WINDOW.store(0, Ordering::Relaxed);
+            let hooks = lock_state()
+                .as_mut()
+                .map(|s| std::mem::take(&mut s.overlay_event_hooks))
+                .unwrap_or_default();
+            for hook in hooks {
+                native_interop::unhook_win_event(hook);
+            }
             let _ = WTSUnRegisterSessionNotification(hwnd);
             tray_icon::remove_all(hwnd);
             LRESULT(0)
@@ -2430,6 +2464,109 @@ fn bounds(rect: RECT) -> crate::overlay_visibility::Bounds {
     }
 }
 
+fn window_class(hwnd: HWND) -> String {
+    let mut class = [0u16; 128];
+    let count = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
+    String::from_utf16_lossy(&class[..count])
+}
+
+/// Shell windows may span the display, while maximized application frames may
+/// extend outside it. Only an application's client area counts as fullscreen.
+fn fullscreen_application_on_monitor(
+    foreground: HWND,
+    taskbar: HWND,
+    monitor: HMONITOR,
+    rect: RECT,
+) -> bool {
+    unsafe {
+        if foreground.is_invalid()
+            || foreground == taskbar
+            || IsChild(taskbar, foreground).as_bool()
+            || !IsWindowVisible(foreground).as_bool()
+            || IsIconic(foreground).as_bool()
+            || MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST) != monitor
+        {
+            return false;
+        }
+        let class = window_class(foreground);
+        if crate::overlay_visibility::is_shell_class(&class) {
+            return false;
+        }
+        let mut client = RECT::default();
+        if GetClientRect(foreground, &mut client).is_err() {
+            return false;
+        }
+        let mut corners = [
+            POINT {
+                x: client.left,
+                y: client.top,
+            },
+            POINT {
+                x: client.right,
+                y: client.bottom,
+            },
+        ];
+        // A zero return is also a valid mapping when the window starts at (0,0).
+        MapWindowPoints(foreground, HWND::default(), &mut corners);
+        crate::overlay_visibility::is_fullscreen_client(
+            &class,
+            crate::overlay_visibility::Bounds {
+                left: corners[0].x,
+                top: corners[0].y,
+                right: corners[1].x,
+                bottom: corners[1].y,
+            },
+            bounds(rect),
+        )
+    }
+}
+
+fn queue_overlay_refresh() {
+    let controller = HWND(RECOVERY_WINDOW.load(Ordering::Relaxed) as *mut _);
+    if !controller.is_invalid() && !OVERLAY_REFRESH_PENDING.swap(true, Ordering::Relaxed) {
+        if unsafe { PostMessageW(controller, WM_APP_OVERLAY_REFRESH, WPARAM(0), LPARAM(0)) }
+            .is_err()
+        {
+            OVERLAY_REFRESH_PENDING.store(false, Ordering::Relaxed);
+        }
+    }
+}
+
+unsafe extern "system" fn on_overlay_event(
+    _hook: HWINEVENTHOOK,
+    event: u32,
+    hwnd: HWND,
+    object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if event == native_interop::EVENT_SYSTEM_FOREGROUND {
+        queue_overlay_refresh();
+        return;
+    }
+    if !matches!(
+        event,
+        native_interop::EVENT_OBJECT_SHOW
+            | native_interop::EVENT_OBJECT_HIDE
+            | native_interop::EVENT_OBJECT_REORDER
+            | native_interop::EVENT_OBJECT_FOCUS
+            | native_interop::EVENT_OBJECT_LOCATIONCHANGE
+    ) {
+        return;
+    }
+    let taskbar = lock_state().as_ref().and_then(|s| s.taskbar_hwnd);
+    let shell_event =
+        taskbar.is_some_and(|taskbar| hwnd == taskbar || IsChild(taskbar, hwnd).as_bool());
+    let foreground_event = object == 0 && hwnd == GetForegroundWindow();
+    // Desktop reorder events also report top-level topmost ordering changes.
+    let desktop_reorder = event == native_interop::EVENT_OBJECT_REORDER
+        && (hwnd.is_invalid() || hwnd == GetDesktopWindow());
+    if shell_event || foreground_event || desktop_reorder {
+        queue_overlay_refresh();
+    }
+}
+
 fn position_at_taskbar() {
     refresh_dpi();
     let (hwnd, tray_offset, taskbar, preferred, dragging) = {
@@ -2474,14 +2611,15 @@ fn position_at_taskbar() {
             return;
         }
         let foreground = GetForegroundWindow();
-        let mut class = [0u16; 128];
-        let count = GetClassNameW(foreground, &mut class).max(0) as usize;
-        let foreground_class = String::from_utf16_lossy(&class[..count]);
+        let foreground_class = window_class(foreground);
+        let fullscreen =
+            fullscreen_application_on_monitor(foreground, taskbar, monitor, info.rcMonitor);
         let reason = crate::overlay_visibility::hide_reason(
             preferred,
             IsWindowVisible(taskbar).as_bool(),
             bounds(taskbar_rect),
             bounds(info.rcMonitor),
+            fullscreen,
         );
         let width = total_widget_width();
         let height = sc(WIDGET_HEIGHT);
@@ -2530,6 +2668,93 @@ fn position_at_taskbar() {
 fn compute_anchor_y(anchor_top: i32, anchor_height: i32, widget_height: i32) -> i32 {
     let anchor_bottom = anchor_top + anchor_height;
     (anchor_bottom - widget_height).max(anchor_top)
+}
+
+#[cfg(test)]
+mod desktop_tests {
+    use super::*;
+
+    #[test]
+    fn native_client_geometry_distinguishes_fullscreen_from_maximized_frame() {
+        unsafe {
+            let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            assert!(GetMonitorInfoW(monitor, &mut info).as_bool());
+            let rect = info.rcMonitor;
+            // Alpha zero exercises real HWND/client geometry without displaying
+            // test content or taking focus from the user's application.
+            let class = native_interop::wide_str("STATIC");
+            let hwnd = CreateWindowExW(
+                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                PCWSTR::from_raw(class.as_ptr()),
+                PCWSTR::null(),
+                WS_POPUP,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                HWND::default(),
+                HMENU::default(),
+                GetModuleHandleW(PCWSTR::null()).unwrap(),
+                None,
+            )
+            .unwrap();
+            struct TestWindow(HWND);
+            impl Drop for TestWindow {
+                fn drop(&mut self) {
+                    unsafe {
+                        let _ = DestroyWindow(self.0);
+                    }
+                }
+            }
+            let _guard = TestWindow(hwnd);
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA).unwrap();
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            assert!(fullscreen_application_on_monitor(
+                hwnd,
+                HWND::default(),
+                monitor,
+                rect
+            ));
+            SetWindowLongW(
+                hwnd,
+                GWL_STYLE,
+                WS_OVERLAPPEDWINDOW.0 as i32 | WS_VISIBLE.0 as i32,
+            );
+            SetWindowPos(
+                hwnd,
+                HWND::default(),
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            )
+            .unwrap();
+            assert!(!fullscreen_application_on_monitor(
+                hwnd,
+                HWND::default(),
+                monitor,
+                rect
+            ));
+            let _ = ShowWindow(hwnd, SW_HIDE);
+            assert!(!fullscreen_application_on_monitor(
+                hwnd,
+                HWND::default(),
+                monitor,
+                rect
+            ));
+            if let Some(taskbar) = native_interop::find_taskbar() {
+                assert!(!fullscreen_application_on_monitor(
+                    taskbar, taskbar, monitor, rect
+                ));
+            }
+        }
+    }
 }
 
 /// WinEvent callback for tray icon location changes
@@ -2593,6 +2818,7 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_DISPLAYCHANGE | WM_DPICHANGED_MSG | WM_SETTINGCHANGE => {
             if msg == WM_DPICHANGED_MSG {
                 let new_dpi = (wparam.0 & 0xFFFF) as u32;
@@ -3199,6 +3425,13 @@ unsafe extern "system" fn wnd_proc(
             }
             tray_icon::remove_all(hwnd);
             if closing {
+                let hooks = lock_state()
+                    .as_mut()
+                    .map(|s| std::mem::take(&mut s.overlay_event_hooks))
+                    .unwrap_or_default();
+                for hook in hooks {
+                    native_interop::unhook_win_event(hook);
+                }
                 tray_icon::remove_all(tray_owner(hwnd));
                 character::destroy();
                 PostQuitMessage(0);
@@ -3882,8 +4115,8 @@ fn draw_pace_marker(
     let actual = (percent / 100.0).clamp(0.0, 1.0);
     let exp = expected.clamp(0.0, 1.0);
     let behind = actual <= exp; // behind pace = headroom = green
-    // Reuse the theme's low/high threshold colors, brightened so the pace
-    // region stands out from the normal fill even at the same hue.
+                                // Reuse the theme's low/high threshold colors, brightened so the pace
+                                // region stands out from the normal fill even at the same hue.
     let base = if behind {
         usage_threshold_color(0.0, is_dark)
     } else {
